@@ -1,0 +1,137 @@
+theory EventBasedDynamicImproved
+begin
+
+builtins: symmetric-encryption, hashing, diffie-hellman
+
+functions:
+  H/1, 
+  PUF/1
+
+rule InitClientProfile:
+  [Fr(ID), Fr(prime), Fr(qroot), Fr(n)]
+  -->
+  [!ClientProfile(ID, prime, qroot, n)]
+
+rule ClientSendRequest:
+  [Fr(sid), Fr(seed), !ClientProfile(ID, prime, qroot, n)]
+  --[ClientSendRequest(ID, sid), Bound(sid, seed)]->
+  [ Out(<sid, H(ID)>),
+    !Registered(sid, ID, prime, qroot, seed, n)
+  ]
+
+rule ServerReceivedRequest:
+  [ In(<sid, H(ID)>),
+    !Registered(sid, ID, prime, qroot, seed, n),
+    Fr(c), 
+    Fr(r)
+  ]
+  --[ServerReceivedRequest(sid, c)]->
+  [
+    !ChallengeForSession(sid, c),
+    !RegCommonCRP(sid, c,r)
+  ]
+
+rule ClientCreateAuth:
+  let
+    key = PUF(c)
+    PR = H(<sid, seed, qroot, n, prime>)
+  in
+  [ !ChallengeForSession(sid, c),
+    !Registered(sid, ID, prime, qroot, seed, n),
+    !RegCommonCRP(sid, c,r)
+  ]
+  --[ClientCreateAuth(sid, ID, key, PR)]->
+  [
+    Out(<sid, H(ID), senc(PR, key)>),
+    !GenKey(PR, key),
+    !PendingValidation(sid, PR, ID)
+  ]
+
+rule ServerValidate:
+  let
+    PR2 = H(<sid, seed, qroot, n, prime>)
+  in
+  [
+    In(<sid, H(ID), senc(PR, key)>),
+    !Registered(sid, ID, prime, qroot, seed, n),
+    !RegCommonCRP(sid, c,r),
+    !GenKey(PR, key),
+    !PendingValidation(sid, PR, ID)
+  ]
+  --[ServerValidate(sid, PR, ID)]->
+  [ !Validated(sid, ID, PR2, key),
+   Out(<sid, H(ID), senc(PR2, key)>)]
+
+rule ClientReceiveMutual:
+  [
+    In(<sid, H(ID), senc(PR2, key)>),
+    !Validated(sid, ID, PR2, key)
+  ]
+  --[ClientReceiveMutual(sid, ID, PR2)]->
+  [
+    Out(sid)
+  ]
+
+restriction UniqueSeedBinding:
+  "All sid1 sid2 seed #t1 #t2.
+  Bound(sid1, seed) @ #t1
+    & Bound(sid2, seed) @ #t2
+  ==> sid1 = sid2"
+
+
+lemma Executability:
+  exists-trace
+  "
+  Ex ID sid c key PR PR2 #t1 #t2 #t3 #t4 #t5.
+  ClientSendRequest(ID, sid) @ t1
+  & ServerReceivedRequest(sid, c) @ t2
+  & ClientCreateAuth(sid, ID, key, PR) @ t3
+  & ServerValidate(sid, PR, ID) @ t4
+  & ClientReceiveMutual(sid, ID, PR2) @ t5
+  & #t1 < #t2
+  & #t2 < #t3
+  & #t3 < #t4
+  & #t4 < #t5
+  "
+
+lemma MutualAuthentication:
+  "
+  All sid ID PR #t1.
+    ClientReceiveMutual(sid, ID, PR) @ #t1
+  ==> (Ex #t0. ServerValidate(sid, PR, ID) @ #t0 & #t0 < #t1)
+  "
+
+lemma ReplayAttackBySamePR_Client_Server:
+  "
+  All sid1 sid2 ID key1 key2 PR1 PR2 #t1 #t2.
+    ClientCreateAuth(sid1, ID, key1, PR1) @ #t1
+    & ClientCreateAuth(sid2, ID, key2, PR2) @ #t2
+    & not(sid1 = sid2)
+  ==> not (PR1 = PR2)
+  "
+
+lemma ReplayAttackBySamePR_Server_Client:
+  "
+  All sid1 sid2 ID PR1 PR2 #t1 #t2.
+    ServerValidate(sid1, PR1, ID) @ #t1
+    & ServerValidate(sid2, PR2, ID) @ #t2
+    & not(sid1 = sid2)
+  ==> not (PR1 = PR2)
+  "
+
+lemma ConfidentialityOfKey:
+  "
+  All sid ID key PR #t1.
+    ClientCreateAuth(sid, ID, key, PR) @ #t1
+  ==> not (Ex #t2. K(key) @ #t2)
+  "
+
+lemma NoSniffing_on_ID:
+  "
+  All sid ID key PR #t1 #t2.
+  ClientCreateAuth(sid, ID, key, PR) @ t1
+  & ClientSendRequest(ID, sid) @ t2
+  ==> not (Ex #t3. K(ID) @ t3)
+  "
+
+end
